@@ -7,7 +7,16 @@ library(plink2R)
 
 ### Tajima's D for each gene
 tajima = fread('cis_trans_inter/21_tajima_D/tajdEd.txt.gz')
-gene_meta = fread('mediation_pathway/00_ref/genecode.GRCh38.gene.meta.gtf')
+# gene_meta = fread('mediation_pathway/00_ref/genecode.GRCh38.gene.meta.gtf')
+# gene_meta_sub = gene_meta[gene_meta$gene_type == 'protein_coding', ]
+# gene_meta_sub = na.omit(gene_meta_sub)
+# gene_meta_bed = data.frame(chr = gene_meta_sub$chr, 
+#                            start = gene_meta_sub$start_hg37,
+#                            end = gene_meta_sub$end_hg37,
+#                            gene = gene_meta_sub$gene_name)
+# fwrite(gene_meta_bed, 'cis_trans_inter/21_tajima_D/gene_meta.bed', 
+#        sep = '\t', col.names = F)
+gene_meta = fread('cis_trans_inter/21_tajima_D/gene_meta_hg18.bed')
 sig_inter = fread('cis_trans_inter/07_prot_inter/sig_prot_prot_inter.txt')
 all_gene = list.files('cis_trans_inter/06_fusion_pred/eur/', pattern = 'good_pred.txt')
 all_gene = sub('_good_pred.txt', '', all_gene)
@@ -15,9 +24,9 @@ uniq_gene = unique(c(sig_inter$target, sig_inter$regulator))
 tajima_all = c()
 for (i in 1:length(all_gene)) {
   gene_i = all_gene[i]
-  chr_i = gene_meta$chr[which(gene_meta$gene_name == gene_i)]
-  start_i = gene_meta$start_hg37[which(gene_meta$gene_name == gene_i)]
-  end_i = gene_meta$end_hg37[which(gene_meta$gene_name == gene_i)]
+  chr_i = gene_meta$V1[which(gene_meta$V4 == gene_i)]
+  start_i = gene_meta$V2[which(gene_meta$V4 == gene_i)]
+  end_i = gene_meta$V3[which(gene_meta$V4 == gene_i)]
   if (length(start_i) == 0) {
     tajima_all[i] = NA
     next
@@ -58,30 +67,12 @@ abo_target = na.omit(abo_target)
 ### the enrichment of significant ABO target in high tajima'D (> 1.5) under different interaction p cutoffs
 tajima_cut = 1.5
 
-# boot_enrich = function(data, i, inter_cut){
-#   df = data[i, ]
-#   sig_inter = sum(df$inter_p < inter_cut & df$tajima > tajima_cut) /
-#     sum(df$inter_p < inter_cut)
-#   not_inter = sum(df$inter_p > inter_cut & df$tajima > tajima_cut) / 
-#     sum(df$inter_p > inter_cut)
-#   return(sig_inter / not_inter)
-# }
-
-# for (i in 1:length(inter_cut_all)) {
-#   tajima_boot = boot(abo_target, boot_enrich, R = 1000, 
-#                      inter_cut = inter_cut_all[i])
-#   enrich_i = tajima_boot$t
-#   tajima_enrich[i] = mean(tajima_boot$t)
-#   enrich_low[i] = quantile(tajima_boot$t, 0.025)
-#   enrich_upper[i] = quantile(tajima_boot$t, 0.975)
-# }
-
 boot_enrich = function(data, i){
   df = data[i, ]
   return(sum(df$tajima > tajima_cut) / nrow(df))
 }
 
-inter_cut_all = c(0.1, 0.05, 0.01, 0.001, 1.7e-9)
+inter_cut_all = c(0.1, 0.05, 0.01, 0.001, 1.7e-7)
 tajima_enrich = c()
 enrich_low = c()
 enrich_upper = c()
@@ -97,7 +88,7 @@ for (i in 1:length(inter_cut_all)) {
 }
 
 enrich_tab = data.frame(inter_cut = c('< 0.1', '< 0.05', '< 0.01', '< 0.001', 
-                                      '< 1.7e-9'),
+                                      '< 1.7e-7'),
                         tajima_enrich = tajima_enrich,
                         enrich_low = enrich_low, 
                         enrich_upper = enrich_upper)
@@ -119,52 +110,3 @@ ggplot(enrich_tab, aes(x = reorder(inter_cut, tajima_enrich),
         panel.border = element_blank(),
         panel.background = element_blank(),
         legend.position = 'none')
-
-### examples of ABO target showing different variance under different O alleles
-prot = 'NPTX1'
-prot_expr = fread(paste0('cis_trans_inter/06_fusion_pred/eur/', 
-                         prot, '_good_pred.txt'))
-
-abo_type = fread('cis_trans_inter/data/ukb_blood_type.pheno')
-colnames(abo_type)[3] = 'blood_type'
-
-prot_expr$blood_type = abo_type$blood_type[match(prot_expr$id, 
-                                                 abo_type$FID)]
-prot_expr = na.omit(prot_expr)
-
-var.test(prot_expr$obs[prot_expr$blood_type != 'OO'], 
-         prot_expr$obs[prot_expr$blood_type == 'OO'])
-
-## variance of protein expression level changing across ABO alleles
-abo_cis = read_plink('cis_trans_inter/00_ref/cis_geno/ABO',
-                     impute="avg")
-prot_expr$o_allele = abo_cis$bed[match(prot_expr$id, abo_cis$fam$V1),
-                                 'rs8176719']
-prot_expr$o_allele = as.factor(prot_expr$o_allele)
-
-boot_var_fun = function(formula, data, i){
-  df = data[i, ]
-  aggre_var = aggregate(formula, data = df, var)
-  return(c(var(df[,3]), aggre_var[,2]))
-}
-var_boot2 = boot(prot_expr, boot_var_fun, 1000, formula = obs ~ o_allele)
-var_dat2 = data.frame(var = apply(var_boot2$t, 2, mean),
-                      ci_low = apply(var_boot2$t, 2, function(x){quantile(x, 0.025)}),
-                      ci_high = apply(var_boot2$t, 2, function(x){quantile(x, 0.975)}),
-                      group = c('all', '0', '1', '2'))
-ggplot(var_dat2[var_dat2$group != 'all', ], aes(x = group, y = var)) + 
-  geom_point(position = position_dodge(0.3), size = 5,  color = 'steelblue') +
-  geom_errorbar(aes(ymin = ci_low, ymax = ci_high), width = .1, 
-                position=position_dodge(0.3), color = 'steelblue') +
-  labs(x = "rs8176719 (ABO) dosage", y = 'Variance', 
-       title = paste0(prot, ' variation across O alleles')) + 
-  theme(text = element_text(size=12, colour = "black"), 
-        axis.text.x = element_text(colour = "black", size = 11),
-        axis.text.y = element_text(colour = "black", size = 11),
-        axis.line = element_line(colour = "black"),
-        panel.grid.major = element_blank(),
-        panel.grid.minor = element_blank(),
-        panel.border = element_blank(),
-        panel.background = element_blank(),
-        legend.position = 'none')
-
